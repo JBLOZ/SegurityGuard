@@ -38,8 +38,14 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 current_detection = {
     "face": None,
     "match": None,
-    "event_id": None
+    "event_id": None,
+    "last_alert_time": 0  # Timestamp de última alerta
 }
+
+# Cooldown entre alertas (segundos)
+DETECTION_COOLDOWN = 5
+
+import time
 
 
 def load_known_faces():
@@ -124,7 +130,11 @@ def generate_video_stream():
                     current_detection["face"] = face
                     current_detection["match"] = match
                     
-                    socketio.emit('face_detected', alert_data)
+                    # Solo emitir alerta si pasó el cooldown (5 segundos)
+                    current_time = time.time()
+                    if current_time - current_detection["last_alert_time"] >= DETECTION_COOLDOWN:
+                        current_detection["last_alert_time"] = current_time
+                        socketio.emit('face_detected', alert_data)
         
         # Codificar frame a JPEG
         jpeg = encode_frame_jpeg(annotated_frame)
