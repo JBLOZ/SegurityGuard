@@ -23,9 +23,9 @@ CAMERA_HEIGHT = int(os.getenv("CAMERA_HEIGHT", 720))
 CAMERA_FPS = int(os.getenv("CAMERA_FPS", 30))
 
 # Configuración de YOLO
-YOLO_MODEL = os.getenv("YOLO_MODEL", "yolov8n.pt")  # nano para velocidad
+YOLO_MODEL = os.getenv("YOLO_MODEL", "yolov8n.pt")  # Modelo nano para velocidad
 YOLO_CONFIDENCE = float(os.getenv("YOLO_CONFIDENCE", 0.5))
-YOLO_DEVICE = os.getenv("YOLO_DEVICE", "cpu")  # "cuda" si hay GPU
+YOLO_DEVICE = os.getenv("YOLO_DEVICE", "cuda")  # Usar GPU RTXi hay GPU
 
 # Configuración de reconocimiento facial
 FACE_RECOGNITION_THRESHOLD = float(os.getenv("FACE_RECOGNITION_THRESHOLD", 0.6))
