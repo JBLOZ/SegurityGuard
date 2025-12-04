@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Seguridad del Hogar</title>
+    <meta name="description"
+        content="Sistema de seguridad inteligente con IA multimodal para reconocimiento de personas">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <div class="logo">
+                    <span class="logo-icon">🏠</span>
+                    <h1>SecurityGuard AI</h1>
+                </div>
+                <div class="status-indicator" id="connectionStatus">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Conectando...</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Video Section -->
+            <section class="video-section">
+                <div class="video-container">
+                    <div class="video-header">
+                        <h2>📹 Video en Vivo</h2>
+                        <div class="video-controls">
+                            <button id="btnStartCamera" class="btn btn-success">
+                                ▶ Iniciar
+                            </button>
+                            <button id="btnStopCamera" class="btn btn-danger" disabled>
+                                ⏹ Detener
+                            </button>
+                        </div>
+                    </div>
+                    <div class="video-wrapper">
+                        <img id="videoFeed" src="{{ url_for('video_feed') }}" alt="Video en vivo" class="video-feed">
+                        <div class="video-overlay" id="videoOverlay">
+                            <span class="loading-text">Cargando cámara...</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Detection Panel -->
+                <div class="detection-panel" id="detectionPanel">
+                    <h3>🔍 Última Detección</h3>
+                    <div class="detection-info">
+                        <div class="face-preview">
+                            <img id="faceImage" src="" alt="Cara detectada">
+                            <div class="no-detection">Sin detección</div>
+                        </div>
+                        <div class="detection-details">
+                            <p><strong>Persona:</strong> <span id="personName">-</span></p>
+                            <p><strong>Confianza:</strong> <span id="confidence">-</span></p>
+                            <p><strong>Hora:</strong> <span id="detectionTime">-</span></p>
+                        </div>
+                    </div>
+
+                    <!-- Action Buttons (shown when detection occurs) -->
+                    <div class="action-buttons" id="actionButtons" style="display: none;">
+                        <button id="btnAllow" class="btn btn-allow">
+                            ✓ PERMITIR
+                        </button>
+                        <button id="btnDeny" class="btn btn-deny">
+                            ✗ DENEGAR
+                        </button>
+                    </div>
+
+                    <div class="save-option" id="saveOption" style="display: none;">
+                        <label>
+                            <input type="checkbox" id="saveToDb">
+                            Guardar persona en base de datos
+                        </label>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Stats Section -->
+            <section class="stats-section">
+                <div class="stat-card">
+                    <div class="stat-icon">👤</div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="totalDetections">0</span>
+                        <span class="stat-label">Detecciones Hoy</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">✓</div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="allowedCount">0</span>
+                        <span class="stat-label">Permitidos</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">✗</div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="deniedCount">0</span>
+                        <span class="stat-label">Denegados</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">⚡</div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="currentFps">--</span>
+                        <span class="stat-label">FPS</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Recent Events -->
+            <section class="events-section">
+                <h2>📋 Eventos Recientes</h2>
+                <div class="events-list" id="eventsList">
+                    <div class="event-placeholder">
+                        No hay eventos recientes
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>SecurityGuard AI © 2024 | Sistema de Seguridad Inteligente</p>
+        </footer>
+    </div>
+
+    <!-- Modal de Alerta de Desconocido -->
+    <div class="modal-overlay" id="alertModal" style="display: none;">
+        <div class="alert-modal">
+            <div class="alert-header">
+                <span class="alert-icon">🚨</span>
+                <h2>¡PERSONA DETECTADA!</h2>
+            </div>
+
+            <div class="alert-body">
+                <div class="alert-face">
+                    <img id="modalFaceImage" src="" alt="Cara detectada">
+                </div>
+
+                <div class="alert-info">
+                    <p class="alert-status" id="modalStatus">DESCONOCIDO</p>
+                    <p class="alert-time" id="modalTime"></p>
+                    <p class="alert-confidence">Confianza: <span id="modalConfidence">0%</span></p>
+                </div>
+            </div>
+
+            <div class="alert-question">
+                <p>¿Deseas abrir la puerta a esta persona?</p>
+            </div>
+
+            <!-- Opción para guardar persona -->
+            <div class="save-person-section" id="savePersonSection">
+                <label class="save-checkbox">
+                    <input type="checkbox" id="modalSaveToDb" checked>
+                    Guardar persona en base de datos
+                </label>
+                <input type="text" id="modalPersonName" class="person-name-input" placeholder="Nombre de la persona"
+                    style="display: none;">
+            </div>
+
+            <div class="alert-actions">
+                <button id="modalBtnAllow" class="btn btn-allow-large">
+                    ✓ PERMITIR ACCESO
+                </button>
+                <button id="modalBtnDeny" class="btn btn-deny-large">
+                    ✗ DENEGAR ACCESO
+                </button>
+            </div>
+
+            <button id="modalBtnClose" class="btn-close-modal">×</button>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="{{ url_for('static', filename='js/socket-handler.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/ui-handler.js') }}"></script>
+</body>
+
+</html>
