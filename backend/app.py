@@ -1,13 +1,10 @@
 """
-Aplicación principal Flask para el Sistema de Seguridad del Hogar
-Sprint 2: Integración de reconocimiento facial
+Aplicación Principal ULTRA-LIGERA
+Optimizada para Raspberry Pi
 """
-# IMPORTANTE: Monkey patch de eventlet debe ir primero
-import eventlet
-eventlet.monkey_patch()
-
 import cv2
-import base64
+import time
+import threading
 from flask import Flask, render_template, Response, jsonify, request
 from flask_socketio import SocketIO, emit
 
@@ -15,13 +12,12 @@ from config import (
     FLASK_HOST,
     FLASK_PORT,
     FLASK_DEBUG,
-    SECRET_KEY
+    SECRET_KEY,
+    USE_LIGHTWEIGHT_DETECTOR
 )
 from modules.video_capture import video_capture, encode_frame_jpeg
-from modules.yolo_detector import yolo_detector
-from modules.face_recognizer import face_recognizer
-from modules.face_matcher import face_matcher
-from modules.db_handler import db_handler, initialize_database
+from modules.lightweight_detector import lightweight_detector
+from modules.geometric_recognizer import geometric_recognizer
 
 # Crear aplicación Flask
 app = Flask(
@@ -31,78 +27,129 @@ app = Flask(
 )
 app.config['SECRET_KEY'] = SECRET_KEY
 
-# Inicializar SocketIO con async_mode correcto
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+# SocketIO simple (sin eventlet para mejor compatibilidad)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# Estado actual de detección (simplificado)
-current_detection = {
-    "face": None,
-    "match": None,
-    "event_id": None
+# Estado global
+app_state = {
+    "last_detection_time": 0,
+    "detection_cooldown": 5,  # Segundos entre alertas
+    "current_detection": None,
+    "frame_count": 0
 }
-
-import time
-
-
-def load_known_faces():
-    """Carga todas las caras conocidas en el matcher."""
-    embeddings = db_handler.get_all_embeddings()
-    for person_id, data in embeddings.items():
-        face_matcher.add_known_face(
-            person_id=person_id,
-            name=data["name"],
-            embedding=data["embedding"],
-            category=data["category"]
-        )
-    print(f"Cargadas {len(embeddings)} caras conocidas")
 
 
 def generate_video_stream():
     """
-    Genera stream de video ULTRA RÁPIDO:
-    - SOLO detección de personas con YOLO (recuadros verdes)
-    - SIN reconocimiento facial (desactivado para máxima velocidad)
+    Genera stream de video ULTRA-LIGERO.
+    - Haar Cascades para detección (5ms/frame)
+    - Reconocimiento geométrico (~1ms)
+    - Procesa 1 de cada 5 frames
     """
     if not video_capture.is_running():
-        video_capture.start()
+        if not video_capture.start():
+            print("ERROR: No se pudo iniciar la cámara")
+            # Retornar un frame de error
+            error_frame = cv2.imread("static/img/no-camera.png") if cv2.os.path.exists("static/img/no-camera.png") else None
+            if error_frame is None:
+                error_frame = create_error_frame()
+            jpeg = encode_frame_jpeg(error_frame)
+            while True:
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + jpeg + b'\r\n')
+                time.sleep(1)
     
-    # Pre-cargar modelo YOLO
-    yolo_detector.load_model()
+    print("Stream de video iniciado")
     
     while True:
         ret, frame = video_capture.read()
         
         if not ret:
-            eventlet.sleep(0.01)  # Dar tiempo a eventlet
+            time.sleep(0.01)
             continue
         
-        # ===== SOLO YOLO - DETECCIÓN DE PERSONAS =====
-        # Esto es rápido y corre en GPU
-        annotated_frame, person_detections = yolo_detector.detect_and_draw(frame)
+        app_state["frame_count"] += 1
         
-        # Codificar frame a JPEG (calidad reducida para más velocidad)
+        # Detectar caras (el detector ya tiene cache interno)
+        annotated_frame, detections = lightweight_detector.detect_and_draw(frame)
+        
+        # Si hay detecciones y pasó el cooldown
+        if detections and should_send_alert():
+            process_detection(detections[0], frame)
+        
+        # Codificar y enviar
         jpeg = encode_frame_jpeg(annotated_frame)
         
         yield (
             b'--frame\r\n'
             b'Content-Type: image/jpeg\r\n\r\n' + jpeg + b'\r\n'
         )
-        
-        # Pequeño yield para eventlet (permite otras conexiones)
-        eventlet.sleep(0)
+
+
+def create_error_frame():
+    """Crea un frame de error cuando no hay cámara."""
+    frame = cv2.zeros((480, 640, 3), dtype="uint8")
+    cv2.putText(
+        frame, "Camara no disponible",
+        (100, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2
+    )
+    return frame
+
+
+def should_send_alert() -> bool:
+    """Verifica si debe enviar alerta (cooldown de 5 seg)."""
+    now = time.time()
+    if now - app_state["last_detection_time"] >= app_state["detection_cooldown"]:
+        app_state["last_detection_time"] = now
+        return True
+    return False
+
+
+def process_detection(detection, frame):
+    """Procesa una detección y envía por WebSocket."""
+    landmarks = detection.landmarks
+    
+    # Intentar reconocimiento geométrico
+    match = None
+    ratios = None
+    
+    if landmarks:
+        ratios = geometric_recognizer.extract_ratios(landmarks)
+        if ratios:
+            match = geometric_recognizer.find_match(ratios)
+    
+    # Guardar estado actual
+    app_state["current_detection"] = {
+        "detection": detection,
+        "match": match,
+        "ratios": ratios
+    }
+    
+    # Preparar datos para WebSocket
+    alert_data = {
+        "person_name": match.name if match else "Desconocido",
+        "confidence": 0.9 if match else 0,
+        "is_known": match is not None,
+        "bbox": detection.bbox,
+        "has_landmarks": landmarks is not None
+    }
+    
+    # Emitir evento
+    socketio.emit('face_detected', alert_data)
+    print(f"Detección: {alert_data['person_name']}")
 
 
 # ==================== RUTAS ====================
 
 @app.route('/')
 def index():
-    """Página principal - Dashboard."""
+    """Página principal."""
     return render_template('index.html')
 
 
 @app.route('/video_feed')
 def video_feed():
-    """Endpoint de streaming de video."""
+    """Stream de video MJPEG."""
     return Response(
         generate_video_stream(),
         mimetype='multipart/x-mixed-replace; boundary=frame'
@@ -111,28 +158,25 @@ def video_feed():
 
 @app.route('/api/status')
 def get_status():
-    """Retorna el estado del sistema."""
+    """Estado del sistema."""
     return jsonify({
-        "camera": {
-            "running": video_capture.is_running(),
-            "properties": video_capture.get_properties() if video_capture.is_running() else {}
-        },
-        "detector": yolo_detector.get_model_info(),
-        "face_matcher": face_matcher.get_stats(),
-        "daily_stats": db_handler.get_daily_stats()
+        "camera_running": video_capture.is_running(),
+        "frame_count": app_state["frame_count"],
+        "detector": "Haar Cascades (lightweight)",
+        "recognizer": geometric_recognizer.get_stats()
     })
 
 
 @app.route('/api/camera/start', methods=['POST'])
 def start_camera():
-    """Inicia la captura de cámara."""
+    """Inicia cámara."""
     success = video_capture.start()
     return jsonify({"success": success})
 
 
 @app.route('/api/camera/stop', methods=['POST'])
 def stop_camera():
-    """Detiene la captura de cámara."""
+    """Detiene cámara."""
     video_capture.stop()
     return jsonify({"success": True})
 
@@ -141,200 +185,116 @@ def stop_camera():
 
 @app.route('/api/persons', methods=['GET'])
 def get_persons():
-    """Obtiene lista de todas las personas."""
-    category = request.args.get('category')
-    persons = db_handler.get_all_persons(category)
-    return jsonify([p.to_dict() for p in persons])
+    """Lista perfiles geométricos."""
+    profiles = [
+        {"id": p.person_id, "name": p.name}
+        for p in geometric_recognizer._known_profiles.values()
+    ]
+    return jsonify(profiles)
 
 
 @app.route('/api/persons', methods=['POST'])
-def create_person():
-    """Crea una nueva persona."""
+def register_person():
+    """Registra nueva persona con la cara actual."""
     data = request.json
+    name = data.get("name", "Persona")
     
-    person = db_handler.create_person(
-        name=data.get('name'),
-        category=data.get('category', 'known'),
-        notes=data.get('notes')
-    )
+    current = app_state.get("current_detection")
+    if not current or not current.get("ratios"):
+        return jsonify({"error": "No hay cara detectada con landmarks"}), 400
     
-    return jsonify(person.to_dict()), 201
-
-
-@app.route('/api/persons/<int:person_id>', methods=['GET'])
-def get_person(person_id):
-    """Obtiene una persona por ID."""
-    person = db_handler.get_person(person_id)
-    if not person:
-        return jsonify({"error": "Persona no encontrada"}), 404
-    return jsonify(person.to_dict())
-
-
-@app.route('/api/persons/<int:person_id>', methods=['PUT'])
-def update_person(person_id):
-    """Actualiza una persona."""
-    data = request.json
-    person = db_handler.update_person(
-        person_id,
-        name=data.get('name'),
-        category=data.get('category'),
-        notes=data.get('notes')
-    )
-    if not person:
-        return jsonify({"error": "Persona no encontrada"}), 404
-    return jsonify(person.to_dict())
-
-
-@app.route('/api/persons/<int:person_id>', methods=['DELETE'])
-def delete_person(person_id):
-    """Elimina una persona."""
-    success = db_handler.delete_person(person_id)
-    if not success:
-        return jsonify({"error": "Persona no encontrada"}), 404
+    # Generar ID único
+    person_id = int(time.time() * 1000) % 100000
     
-    # Eliminar del matcher
-    face_matcher.remove_known_face(person_id)
-    
-    return jsonify({"success": True})
-
-
-@app.route('/api/persons/<int:person_id>/register-face', methods=['POST'])
-def register_face(person_id):
-    """Registra la cara actual para una persona."""
-    person = db_handler.get_person(person_id)
-    if not person:
-        return jsonify({"error": "Persona no encontrada"}), 404
-    
-    face = current_detection.get("face")
-    if face is None or face.embedding is None:
-        return jsonify({"error": "No hay cara detectada actualmente"}), 400
-    
-    # Guardar imagen de la cara
-    photo_path = face_recognizer.save_face(face, person.name)
-    
-    # Actualizar persona con embedding
-    db_handler.update_person(
-        person_id,
-        embedding=face.embedding,
-        photo_path=str(photo_path) if photo_path else None
-    )
-    
-    # Añadir al matcher
-    face_matcher.add_known_face(
+    # Guardar perfil geométrico
+    geometric_recognizer.add_profile(
         person_id=person_id,
-        name=person.name,
-        embedding=face.embedding,
-        category=person.category
+        name=name,
+        ratios=current["ratios"]
     )
     
     return jsonify({
         "success": True,
-        "message": f"Cara registrada para {person.name}",
-        "photo_path": str(photo_path) if photo_path else None
+        "person_id": person_id,
+        "name": name,
+        "message": f"Persona '{name}' registrada con perfil geométrico"
     })
 
 
-# ==================== API DE EVENTOS ====================
-
-@app.route('/api/events', methods=['GET'])
-def get_events():
-    """Obtiene eventos recientes."""
-    limit = request.args.get('limit', 50, type=int)
-    events = db_handler.get_recent_events(limit)
-    return jsonify([e.to_dict() for e in events])
+@app.route('/api/persons/<int:person_id>', methods=['DELETE'])
+def delete_person(person_id):
+    """Elimina un perfil."""
+    geometric_recognizer.remove_profile(person_id)
+    return jsonify({"success": True})
 
 
-# ==================== WEBSOCKET EVENTS ====================
+# ==================== WEBSOCKET ====================
 
 @socketio.on('connect')
 def handle_connect():
     """Cliente conectado."""
-    print('Cliente conectado')
-    emit('status', {'message': 'Conectado al servidor de seguridad'})
+    print('Cliente WebSocket conectado')
+    emit('status', {'message': 'Conectado al servidor'})
 
 
 @socketio.on('disconnect')
 def handle_disconnect():
     """Cliente desconectado."""
-    print('Cliente desconectado')
+    print('Cliente WebSocket desconectado')
+
+
+@socketio.on('register_face')
+def handle_register_face(data):
+    """Registra la cara actual."""
+    name = data.get("name", "Persona")
+    
+    current = app_state.get("current_detection")
+    if not current or not current.get("ratios"):
+        emit('error', {'message': 'No hay cara detectada'})
+        return
+    
+    person_id = int(time.time() * 1000) % 100000
+    geometric_recognizer.add_profile(person_id, name, current["ratios"])
+    
+    emit('person_registered', {
+        'person_id': person_id,
+        'name': name
+    })
 
 
 @socketio.on('user_response')
 def handle_user_response(data):
-    """Maneja la respuesta del usuario (permitir/denegar)."""
+    """Maneja respuesta del usuario (permitir/denegar)."""
     action = data.get('action')
-    save_to_db = data.get('save_to_db', False)
+    save_person = data.get('save_to_db', False)
+    person_name = data.get('person_name', 'Visitante')
     
-    face = current_detection.get("face")
-    match = current_detection.get("match")
+    if action == 'allow' and save_person:
+        current = app_state.get("current_detection")
+        if current and current.get("ratios"):
+            person_id = int(time.time() * 1000) % 100000
+            geometric_recognizer.add_profile(person_id, person_name, current["ratios"])
+            emit('person_registered', {'person_id': person_id, 'name': person_name})
     
-    # Crear evento de detección
-    event = db_handler.create_detection_event(
-        person_id=match.person_id if match else None,
-        confidence=match.similarity if match else None,
-        action_taken=action
-    )
-    
-    # Si es permitir y quiere guardar nueva persona
-    if action == 'allow' and save_to_db and not match and face:
-        # Crear nueva persona
-        new_person = db_handler.create_person(
-            name=data.get('person_name', 'Nuevo Visitante'),
-            embedding=face.embedding,
-            category='known'
-        )
-        
-        # Añadir al matcher
-        face_matcher.add_known_face(
-            person_id=new_person.id,
-            name=new_person.name,
-            embedding=face.embedding,
-            category='known'
-        )
-        
-        emit('person_saved', {
-            'person_id': new_person.id,
-            'name': new_person.name
-        })
-    
-    emit('response_confirmed', {
-        'action': action,
-        'event_id': event.id
-    })
-
-
-@socketio.on('request_frame')
-def handle_request_frame():
-    """Solicitud de frame individual."""
-    ret, frame = video_capture.read()
-    if ret:
-        annotated_frame, detections = yolo_detector.detect_and_draw(frame)
-        jpeg = encode_frame_jpeg(annotated_frame)
-        emit('frame', {'data': jpeg})
+    emit('response_confirmed', {'action': action})
 
 
 # ==================== MAIN ====================
 
 if __name__ == '__main__':
     print("=" * 50)
-    print("Sistema de Seguridad del Hogar con IA Multimodal")
+    print("Sistema de Seguridad ULTRA-LIGERO")
+    print("Optimizado para Raspberry Pi")
     print("=" * 50)
-    
-    # Inicializar base de datos
-    try:
-        initialize_database()
-        load_known_faces()
-    except Exception as e:
-        print(f"Error inicializando BD: {e}")
-    
+    print(f"Detector: Haar Cascades")
+    print(f"Reconocimiento: Geométrico (ratios faciales)")
     print(f"Servidor: http://{FLASK_HOST}:{FLASK_PORT}")
     print()
     
-    # Iniciar servidor
     socketio.run(
         app,
         host=FLASK_HOST,
         port=FLASK_PORT,
-        debug=FLASK_DEBUG
+        debug=FLASK_DEBUG,
+        allow_unsafe_werkzeug=True
     )
-

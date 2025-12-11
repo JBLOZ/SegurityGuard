@@ -16,16 +16,17 @@ EVENTS_DIR = DATA_DIR / "events"
 for dir_path in [DATA_DIR, MODELS_DIR, FACES_DIR, EVENTS_DIR]:
     dir_path.mkdir(parents=True, exist_ok=True)
 
-# Configuración de cámara
+# Configuración de cámara (resolución baja para rendimiento)
 CAMERA_SOURCE = os.getenv("CAMERA_SOURCE", 0)  # 0 = webcam USB, o URL RTSP
-CAMERA_WIDTH = int(os.getenv("CAMERA_WIDTH", 1280))
-CAMERA_HEIGHT = int(os.getenv("CAMERA_HEIGHT", 720))
-CAMERA_FPS = int(os.getenv("CAMERA_FPS", 30))
+CAMERA_WIDTH = int(os.getenv("CAMERA_WIDTH", 640))   # Reducido para rendimiento
+CAMERA_HEIGHT = int(os.getenv("CAMERA_HEIGHT", 480)) # Reducido para rendimiento
+CAMERA_FPS = int(os.getenv("CAMERA_FPS", 15))  # 15 FPS suficiente
 
-# Configuración de YOLO
-YOLO_MODEL = os.getenv("YOLO_MODEL", "yolov8n.pt")  # Modelo nano para velocidad
+# Configuración de detección (ULTRA LIGERO)
+YOLO_MODEL = os.getenv("YOLO_MODEL", "yolov8n.pt")  # Modelo nano
 YOLO_CONFIDENCE = float(os.getenv("YOLO_CONFIDENCE", 0.5))
-YOLO_DEVICE = os.getenv("YOLO_DEVICE", "cuda")  # Usar GPU RTXi hay GPU
+YOLO_DEVICE = os.getenv("YOLO_DEVICE", "cpu")  # CPU para compatibilidad universal
+USE_LIGHTWEIGHT_DETECTOR = True  # Usar Haar Cascades en vez de YOLO
 
 # Configuración de reconocimiento facial
 FACE_RECOGNITION_THRESHOLD = float(os.getenv("FACE_RECOGNITION_THRESHOLD", 0.6))
