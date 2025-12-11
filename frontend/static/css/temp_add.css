@@ -1,0 +1,9 @@
+.event-status.known {
+    background: rgba(16, 185, 129, 0.2);
+    color: var(--success);
+}
+
+.event-status.unknown {
+    background: rgba(249, 115, 22, 0.2);
+    color: #f97316;
+}

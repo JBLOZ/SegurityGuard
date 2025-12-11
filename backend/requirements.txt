@@ -12,6 +12,12 @@ opencv-python>=4.8.0
 Pillow>=10.0.0
 numpy>=1.26.0
 
+# PyTorch con CUDA (GPU NVIDIA)
+# Se instala manualmente con: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch>=2.0.0
+torchvision>=0.15.0
+
 # Detección de Objetos (YOLO)
 ultralytics>=8.0.200
 

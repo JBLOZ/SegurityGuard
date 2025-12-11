@@ -34,16 +34,12 @@ app.config['SECRET_KEY'] = SECRET_KEY
 # Inicializar SocketIO con async_mode correcto
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
-# Estado actual de detección
+# Estado actual de detección (simplificado)
 current_detection = {
     "face": None,
     "match": None,
-    "event_id": None,
-    "last_alert_time": 0  # Timestamp de última alerta
+    "event_id": None
 }
-
-# Cooldown entre alertas (segundos)
-DETECTION_COOLDOWN = 5
 
 import time
 
@@ -62,7 +58,11 @@ def load_known_faces():
 
 
 def generate_video_stream():
-    """Genera stream de video con detecciones de personas y caras."""
+    """
+    Genera stream de video ULTRA RÁPIDO:
+    - SOLO detección de personas con YOLO (recuadros verdes)
+    - SIN reconocimiento facial (desactivado para máxima velocidad)
+    """
     if not video_capture.is_running():
         video_capture.start()
     
@@ -73,76 +73,23 @@ def generate_video_stream():
         ret, frame = video_capture.read()
         
         if not ret:
+            eventlet.sleep(0.01)  # Dar tiempo a eventlet
             continue
         
-        # Detectar personas con YOLO
+        # ===== SOLO YOLO - DETECCIÓN DE PERSONAS =====
+        # Esto es rápido y corre en GPU
         annotated_frame, person_detections = yolo_detector.detect_and_draw(frame)
         
-        # Si hay personas, detectar caras
-        if person_detections:
-            faces = face_recognizer.detect_faces(frame)
-            
-            # Dibujar caras detectadas
-            annotated_frame = face_recognizer.draw_faces(annotated_frame, faces)
-            
-            # Intentar reconocer cada cara
-            for face in faces:
-                if face.embedding is not None:
-                    match = face_matcher.find_match(face.embedding)
-                    
-                    if match:
-                        # Persona conocida
-                        label = f"{match.person_name}: {match.confidence_percent:.0f}%"
-                        color = (0, 255, 0)  # Verde
-                    else:
-                        # Persona desconocida
-                        label = "Desconocido"
-                        color = (0, 0, 255)  # Rojo
-                    
-                    # Dibujar etiqueta
-                    cv2.putText(
-                        annotated_frame,
-                        label,
-                        (face.x, face.y + face.height + 20),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.6,
-                        color,
-                        2,
-                        cv2.LINE_AA
-                    )
-                    
-                    # Enviar alerta por WebSocket
-                    face_b64 = None
-                    if face.image is not None:
-                        _, buffer = cv2.imencode('.jpg', face.image)
-                        face_b64 = base64.b64encode(buffer).decode('utf-8')
-                    
-                    alert_data = {
-                        "person_name": match.person_name if match else "Desconocido",
-                        "confidence": match.similarity if match else 0,
-                        "category": match.category if match else "unknown",
-                        "is_known": match is not None,
-                        "face_image": f"data:image/jpeg;base64,{face_b64}" if face_b64 else None,
-                        "bbox": face.bbox
-                    }
-                    
-                    # Guardar detección actual
-                    current_detection["face"] = face
-                    current_detection["match"] = match
-                    
-                    # Solo emitir alerta si pasó el cooldown (5 segundos)
-                    current_time = time.time()
-                    if current_time - current_detection["last_alert_time"] >= DETECTION_COOLDOWN:
-                        current_detection["last_alert_time"] = current_time
-                        socketio.emit('face_detected', alert_data)
-        
-        # Codificar frame a JPEG
+        # Codificar frame a JPEG (calidad reducida para más velocidad)
         jpeg = encode_frame_jpeg(annotated_frame)
         
         yield (
             b'--frame\r\n'
             b'Content-Type: image/jpeg\r\n\r\n' + jpeg + b'\r\n'
         )
+        
+        # Pequeño yield para eventlet (permite otras conexiones)
+        eventlet.sleep(0)
 
 
 # ==================== RUTAS ====================

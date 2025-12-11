@@ -103,11 +103,14 @@ class YOLODetector:
             if not self.load_model():
                 return []
         
-        # Ejecutar inferencia
+        # Ejecutar inferencia OPTIMIZADA para GPU
         results = self.model(
             frame,
             conf=self.confidence,
-            verbose=False
+            verbose=False,
+            imgsz=640,          # Tamaño reducido para más velocidad
+            half=True,          # FP16 para GPU (2x más rápido)
+            classes=[0] if only_persons else None  # Solo detectar personas
         )[0]
         
         detections = []

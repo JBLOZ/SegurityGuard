@@ -49,7 +49,14 @@ socket.on('detections', (data) => {
 
 socket.on('face_detected', (data) => {
     console.log('👤 Cara detectada:', data);
+    // Ahora usamos el panel lateral en lugar del modal
     handleFaceDetection(data);
+});
+
+// Nuevo evento para actualizaciones de reconocimiento facial (cada 30 segundos)
+socket.on('face_recognition_update', (data) => {
+    console.log('🔍 Actualización de reconocimiento facial:', data);
+    handleFaceRecognitionUpdate(data);
 });
 
 socket.on('alert', (data) => {
@@ -121,6 +128,7 @@ function handleDetections(detections) {
 
 /**
  * Procesa detección de cara con reconocimiento facial
+ * Ahora solo actualiza el panel lateral (sin modal popup)
  */
 function handleFaceDetection(data) {
     // Actualizar contador
@@ -153,23 +161,86 @@ function handleFaceDetection(data) {
     // Estilo según si es conocido o no
     if (data.is_known) {
         panel.style.borderColor = '#10b981'; // Verde
+        showToast(`¡Persona conocida: ${personName}!`, 'success');
     } else {
         panel.style.borderColor = '#ef4444'; // Rojo
-
-        // Mostrar modal de alerta para DESCONOCIDO
-        if (window.showAlertModal) {
-            window.showAlertModal(data);
-        }
+        showToast('⚠️ Persona desconocida detectada', 'warning');
+        // YA NO mostramos el modal popup molesto
     }
 
-    // Mostrar botones de acción en panel lateral también
+    // Mostrar botones de acción en panel lateral
     showActionButtons();
 
-    // Quitar efecto después de 5 segundos
+    // Añadir a lista de eventos
+    addEventToList(personName, data.is_known ? 'known' : 'unknown');
+
+    // Quitar efecto después de 10 segundos
     setTimeout(() => {
         panel.classList.remove('active');
         panel.style.borderColor = '';
-    }, 5000);
+    }, 10000);
+}
+
+/**
+ * Procesa actualizaciones de reconocimiento facial (cada 30 segundos)
+ * Actualiza el panel lateral con los resultados del escaneo
+ */
+function handleFaceRecognitionUpdate(data) {
+    const faces = data.faces || [];
+    const nextScanIn = data.next_scan_in || 30;
+    
+    if (faces.length === 0) {
+        return;
+    }
+
+    // Procesar cada cara detectada
+    faces.forEach((face, index) => {
+        // Actualizar el panel con la primera cara (o la más relevante)
+        if (index === 0) {
+            const panel = document.getElementById('detectionPanel');
+            panel.classList.add('active');
+
+            document.getElementById('personName').textContent = face.person_name;
+            document.getElementById('confidence').textContent = 
+                (face.confidence * 100).toFixed(1) + '%';
+            document.getElementById('detectionTime').textContent = 
+                new Date().toLocaleTimeString();
+
+            if (face.face_image) {
+                const faceImg = document.getElementById('faceImage');
+                faceImg.src = face.face_image;
+                faceImg.classList.add('visible');
+                faceImg.parentElement.classList.add('has-face');
+            }
+
+            // Estilo según si es conocido
+            panel.style.borderColor = face.is_known ? '#10b981' : '#ef4444';
+
+            // Guardar para acciones
+            appState.pendingDetection = face;
+            showActionButtons();
+        }
+
+        // Añadir a lista de eventos
+        addEventToList(
+            face.person_name, 
+            face.is_known ? 'known' : 'unknown'
+        );
+
+        // Mostrar toast informativo
+        if (face.is_known) {
+            showToast(`Reconocido: ${face.person_name} (${(face.confidence * 100).toFixed(0)}%)`, 'success');
+        } else {
+            showToast('Persona desconocida detectada', 'warning');
+        }
+    });
+
+    // Actualizar estadísticas
+    appState.stats.totalDetections += faces.length;
+    updateStatsUI();
+
+    // Mostrar info del próximo escaneo
+    console.log(`Próximo escaneo facial en ${nextScanIn} segundos`);
 }
 
 /**
@@ -278,16 +349,45 @@ function addEventToList(name, status) {
         placeholder.remove();
     }
 
+    // Determinar texto y clase según el status
+    let statusText, statusClass, icon;
+    switch(status) {
+        case 'allowed':
+            statusText = 'Permitido';
+            statusClass = 'allowed';
+            icon = '✓';
+            break;
+        case 'denied':
+            statusText = 'Denegado';
+            statusClass = 'denied';
+            icon = '✗';
+            break;
+        case 'known':
+            statusText = 'Conocido';
+            statusClass = 'known';
+            icon = '👤';
+            break;
+        case 'unknown':
+            statusText = 'Desconocido';
+            statusClass = 'unknown';
+            icon = '❓';
+            break;
+        default:
+            statusText = 'Pendiente';
+            statusClass = 'pending';
+            icon = '⏳';
+    }
+
     const eventItem = document.createElement('div');
     eventItem.className = 'event-item';
     eventItem.innerHTML = `
-        <div class="event-avatar">👤</div>
+        <div class="event-avatar">${icon}</div>
         <div class="event-details">
             <div class="event-name">${name}</div>
             <div class="event-time">${new Date().toLocaleTimeString()}</div>
         </div>
-        <span class="event-status ${status}">
-            ${status === 'allowed' ? 'Permitido' : status === 'denied' ? 'Denegado' : 'Pendiente'}
+        <span class="event-status ${statusClass}">
+            ${statusText}
         </span>
     `;
 

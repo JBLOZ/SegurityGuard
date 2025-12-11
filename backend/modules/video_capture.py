@@ -170,8 +170,8 @@ class VideoCapture:
 video_capture = VideoCapture()
 
 
-def encode_frame_jpeg(frame: cv2.typing.MatLike, quality: int = 80) -> bytes:
-    """Codifica un frame a JPEG."""
+def encode_frame_jpeg(frame: cv2.typing.MatLike, quality: int = 60) -> bytes:
+    """Codifica un frame a JPEG (calidad reducida para velocidad)."""
     encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
     _, buffer = cv2.imencode('.jpg', frame, encode_param)
     return buffer.tobytes()

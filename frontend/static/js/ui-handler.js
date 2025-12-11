@@ -242,29 +242,25 @@ function showToast(message, type = 'info') {
         document.body.appendChild(toastContainer);
     }
 
-    const colors = {
-        success: '#10b981',
-        danger: '#ef4444',
-        warning: '#f59e0b',
-        info: '#6366f1'
-    };
-
     const icons = {
         success: '✓',
         danger: '✗',
+        error: '✗',
         warning: '⚠',
         info: 'ℹ'
     };
 
     const toast = document.createElement('div');
-    toast.className = 'toast ' + type;
+    // Mapear 'danger' a 'error' para CSS
+    const cssType = type === 'danger' ? 'error' : type;
+    toast.className = 'toast ' + cssType;
     toast.innerHTML = `<span>${icons[type] || icons.info}</span> ${message}`;
     toastContainer.appendChild(toast);
 
     setTimeout(() => {
-        toast.style.animation = 'slideOut 0.3s ease';
+        toast.classList.add('hiding');
         setTimeout(() => toast.remove(), 300);
-    }, 3000);
+    }, 4000);
 }
 
 // Exponer showAlertModal globalmente
