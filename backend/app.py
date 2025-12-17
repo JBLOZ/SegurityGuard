@@ -30,36 +30,34 @@ app.config['SECRET_KEY'] = SECRET_KEY
 # SocketIO simple (sin eventlet para mejor compatibilidad)
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-# Estado global
+# Estado global con tracking inteligente
 app_state = {
-    "last_detection_time": 0,
-    "detection_cooldown": 5,  # Segundos entre alertas
+    "frame_count": 0,
     "current_detection": None,
-    "frame_count": 0
+    # Tracking de persona actual
+    "person_in_view": False,           # ¿Hay alguien en cámara?
+    "person_already_alerted": False,   # ¿Ya se alertó de esta persona?
+    "frames_without_person": 0,        # Frames sin detectar nadie
+    "frames_to_reset": 15              # Frames sin persona para resetear (0.5 seg a 30fps)
 }
 
 
 def generate_video_stream():
     """
-    Genera stream de video ULTRA-LIGERO.
-    - Haar Cascades para detección (5ms/frame)
-    - Reconocimiento geométrico (~1ms)
-    - Procesa 1 de cada 5 frames
+    Genera stream de video ULTRA-LIGERO con tracking inteligente.
+    Solo alerta cuando aparece una NUEVA persona.
     """
     if not video_capture.is_running():
         if not video_capture.start():
             print("ERROR: No se pudo iniciar la cámara")
-            # Retornar un frame de error
-            error_frame = cv2.imread("static/img/no-camera.png") if cv2.os.path.exists("static/img/no-camera.png") else None
-            if error_frame is None:
-                error_frame = create_error_frame()
+            error_frame = create_error_frame()
             jpeg = encode_frame_jpeg(error_frame)
             while True:
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + jpeg + b'\r\n')
                 time.sleep(1)
     
-    print("Stream de video iniciado")
+    print("Stream de video iniciado (modo tracking inteligente)")
     
     while True:
         ret, frame = video_capture.read()
@@ -70,12 +68,36 @@ def generate_video_stream():
         
         app_state["frame_count"] += 1
         
-        # Detectar caras (el detector ya tiene cache interno)
+        # Detectar caras
         annotated_frame, detections = lightweight_detector.detect_and_draw(frame)
         
-        # Si hay detecciones y pasó el cooldown
-        if detections and should_send_alert():
-            process_detection(detections[0], frame)
+        # LÓGICA DE TRACKING INTELIGENTE
+        if detections:
+            # Hay alguien en cámara
+            app_state["frames_without_person"] = 0
+            
+            if not app_state["person_in_view"]:
+                # NUEVA persona acaba de entrar
+                app_state["person_in_view"] = True
+                app_state["person_already_alerted"] = False
+                print(">> Nueva persona detectada en cámara")
+            
+            # Solo alertar si no hemos alertado ya de esta persona
+            if not app_state["person_already_alerted"]:
+                process_detection(detections[0], frame)
+                app_state["person_already_alerted"] = True
+        else:
+            # No hay nadie en cámara
+            app_state["frames_without_person"] += 1
+            
+            # Si llevamos varios frames sin persona, resetear
+            if app_state["frames_without_person"] >= app_state["frames_to_reset"]:
+                if app_state["person_in_view"]:
+                    print(">> Persona salió de cámara")
+                    socketio.emit('person_left', {})
+                
+                app_state["person_in_view"] = False
+                app_state["person_already_alerted"] = False
         
         # Codificar y enviar
         jpeg = encode_frame_jpeg(annotated_frame)
@@ -96,17 +118,8 @@ def create_error_frame():
     return frame
 
 
-def should_send_alert() -> bool:
-    """Verifica si debe enviar alerta (cooldown de 5 seg)."""
-    now = time.time()
-    if now - app_state["last_detection_time"] >= app_state["detection_cooldown"]:
-        app_state["last_detection_time"] = now
-        return True
-    return False
-
-
 def process_detection(detection, frame):
-    """Procesa una detección y envía por WebSocket."""
+    """Procesa una detección NUEVA y envía por WebSocket."""
     landmarks = detection.landmarks
     
     # Intentar reconocimiento geométrico
